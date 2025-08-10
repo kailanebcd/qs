@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Animated Market Trends Visualizer</title>
+
+<!-- CDNs -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<!-- gif.js (optional, heavier) removed for clarity — can add later if wanted -->
+
+<style>
+/* ---------- Theme variables (switches for dark/light) ---------- */
+:root{
+  --bg: #071028;
+  --panel: rgba(255,255,255,0.03);
+  --glass-stroke: rgba(255,255,255,0.06);
+  --muted: rgba(255,255,255,0.66);
+  --accent-start: #5EEAD4;
+  --accent-end: #60A5FA;
+  --text: #EAF6F0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+}
+/* light theme override */
+:root[data-theme="light"]{
+  --bg: linear-gradient(180deg,#eaf8f7,#f3fbff);
+  --panel: rgba(255,255,255,0.6);
+  --glass-stroke: rgba(13,17,23,0.06);
+  --muted: rgba(20,30,40,0.7);
+  --accent-start: #0ea5a4;
+  --accent-end: #3b82f6;
+  --text: #071028;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
+.container{max-width:1180px;margin:28px auto;padding:18px;display:grid;grid-template-columns:380px 1fr;gap:18px}
+.card{
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+  border:1px solid var(--glass-stroke);
+  backdrop-filter: blur(10px) saturate(120%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+  border-radius:14px;padding:14px;box-shadow:0 10px 40px rgba(2,6,23,0.45);
+}
+.sidebar{display:flex;flex-direction:column;gap:12px;max-height:calc(100vh - 80px);overflow:auto}
+h1{margin:0;font-size:18px}
+.muted{color:var(--muted);font-size:13px}
+.controls{display:grid;gap:10px}
+label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
+input[type="text"],select,input[type="file"],textarea{
+  width:100%;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.04);
+  background:transparent;color:inherit;font-size:14px;outline:none;
+}
+.btn{display:inline-flex;gap:8px;align-items:center;padding:9px 12px;border-radius:10px;border:0;cursor:pointer;
+  background:linear-gradient(90deg,var(--accent-start)22%, rgba(99,102,241,0.06));
+  color:var(--text);font-weight:600;
+}
+.row{display:flex;gap:8px;align-items:center}
+.filebox{padding:8px;border-radius:10px;border:1px dashed rgba(255,255,255,0.04);text-align:center}
+.small{font-size:13px;color:var(--muted)}
+.chip{padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.04);font-size:13px;color:var(--muted)}
+.chart-card{display:flex;flex-direction:column;gap:12px;height:calc(100vh - 80px)}
+#canvasWrap{flex:1;display:flex;align-items:center;justify-content:center;padding:12px;min-height:320px}
+canvas{max-width:100%;max-height:100%}
+.legend{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.meta{display:flex;justify-content:space-between;align-items:center}
+footer{grid-column:1/-1;text-align:center;color:var(--muted);font-size:13px;margin-top:8px}
+.pulse{position:absolute;right:26px;top:18px;width:12px;height:12px;border-radius:50%;
+  background:linear-gradient(90deg,var(--accent-start),var(--accent-end));
+  box-shadow:0 0 10px var(--accent-start),0 0 30px rgba(96,165,250,0.12);
+  animation:pulse 2s infinite}
+@keyframes pulse{0%{transform:scale(.9);opacity:1}50%{transform:scale(1.6);opacity:.45}100%{transform:scale(.9);opacity:1}}
+.particle-canvas{position:fixed;left:0;top:0;right:0;bottom:0;pointer-events:none;mix-blend-mode:screen;opacity:0.42}
+.themeToggle{margin-left:auto;padding:6px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:var(--muted)}
+@media (max-width:980px){.container{grid-template-columns:1fr;padding:12px}.sidebar{max-height:none}.chart-card{height:auto}}
+</style>
+</head>
+<body>
+<canvas id="particles" class="particle-canvas"></canvas>
+
+<div class="container">
+  <!-- SIDEBAR -->
+  <div class="card sidebar">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div>
+        <h1>Market Trends Visualizer</h1>
+        <div class="muted">Animated • Glassmorphic • Auto-cycle • Dark mode</div>
+      </div>
+      <div style="margin-left:auto;position:relative">
+        <div class="pulse" title="Live pulse"></div>
+        <button id="themeBtn" class="themeToggle small" title="Toggle theme">Theme</button>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div>
+        <label>Dataset</label>
+        <select id="datasetSelect">
+          <option value="crypto7">Crypto — last 7 days</option>
+          <option value="stocks7">Stocks — last 7 days</option>
+          <option value="techAdopt">Tech Adoption — yearly</option>
+          <option value="paste">Paste / Edit CSV</option>
+        </select>
+      </div>
+
+      <div>
+        <label>CSV (first col = labels)</label>
+        <textarea id="csvArea" rows="5" placeholder="Date,SeriesA,SeriesB&#10;2025-08-01,100,50"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="btn" id="loadCsvBtn">Load CSV</button>
+          <button class="btn" id="uploadBtn">Upload</button>
+          <input id="fileInput" type="file" accept=".csv" style="display:none" />
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div>
+          <label>Chart</label>
+          <select id="chartType">
+            <option value="line">Line</option>
+            <option value="bar">Bar</option>
+            <option value="stacked">Stacked Area</option>
+          </select>
+        </div>
+        <div>
+          <label>Smoothing</label>
+          <select id="smoothing">
+            <option value="none">None</option>
+            <option value="low">Low</option>
+            <option value="med">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label>Timeframe (crop recent)</label>
+        <input id="timeframe" type="range" min="10" max="100" value="100" />
+        <div class="row"><div class="small" id="timeframeVal">100%</div><div style="flex:1"></div><button class="btn" id="fitBtn">Fit</button></div>
+      </div>
+
+      <div>
+        <label>Actions</label>
+        <div class="row">
+          <button class="btn" id="playBtn">Play</button>
+          <button class="btn" id="pauseBtn">Pause</button>
+          <button class="btn" id="exportPng">Export PNG</button>
+          <button class="btn" id="exportCsv">Export CSV</button>
+        </div>
+      </div>
+
+      <div>
+        <label>Share / Embed</label>
+        <div class="row"><button class="btn" id="copyPreset">Copy Preset</button><button class="btn" id="embedBtn">Get Embed</button></div>
+        <div class="small muted">Preset copies a base64 snapshot of dataset + settings to clipboard.</div>
+      </div>
+
+      <div>
+        <label>Tips</label>
+        <div class="small"><span class="chip">Use daily or yearly labels</span> <span class="chip">Keep series ≤ 6 for clarity</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHART -->
+  <div class="card chart-card">
+    <div class="meta">
+      <div><div class="legend" id="legendWrap"></div><div class="small" id="dataSummary">No data loaded yet</div></div>
+      <div style="text-align:right"><div class="small">Deploy: GitHub Pages / Vercel</div></div>
+    </div>
+
+    <div id="canvasWrap"><canvas id="chartCanvas" width="900" height="420"></canvas></div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div class="small" id="status">Ready — pick a dataset.</div>
+      <div class="small" id="exportStatus"></div>
+    </div>
+
+    <footer class="muted">Single-file. Editable. Want me to minify it next?</footer>
+  </div>
+</div>
+
+<script>
+/* ===========================
+   Readable Single-file App JS
+   =========================== */
+
+/* ---------- Embedded datasets (realistic samples) ---------- */
+const EMBED = {
+  crypto7: `date,Bitcoin,Ethereum,Solana
+2025-08-03,68520,3420,156
+2025-08-04,69180,3445,159
+2025-08-05,70050,3489,161
+2025-08-06,69720,3475,160
+2025-08-07,70890,3520,165
+2025-08-08,71300,3545,167
+2025-08-09,72050,3580,169
+`,
+  stocks7: `date,S&P500,NASDAQ,DOW
+2025-08-03,5140,17220,40220
+2025-08-04,5160,17280,40350
+2025-08-05,5190,17340,40500
+2025-08-06,5180,17300,40450
+2025-08-07,5210,17370,40600
+2025-08-08,5230,17410,40720
+2025-08-09,5260,17460,40850
+`,
+  techAdopt: `Year,AI Tools,Blockchain,IoT Devices
+2018,8,5,15
+2019,12,7,20
+2020,18,9,25
+2021,28,12,32
+2022,40,16,40
+2023,52,22,47
+2024,65,28,55
+`
+};
+
+/* ---------- Utility helpers ---------- */
+const $ = id => document.getElementById(id);
+const status = txt => { $('status').textContent = txt; };
+const exp = txt => { $('exportStatus').textContent = txt; setTimeout(()=>{$('exportStatus').textContent='';},3000); };
+
+function parseCSV(text){
+  return new Promise(resolve => {
+    const res = Papa.parse(text.trim(), {header:true, dynamicTyping:true, skipEmptyLines:true});
+    resolve(res);
+  });
+}
+
+function buildFromParsed(parsed){
+  const fields = parsed.meta.fields.slice();
+  const labelKey = fields[0];
+  const labels = parsed.data.map(r => r[labelKey]);
+  const seriesKeys = fields.slice(1);
+  const datasets = seriesKeys.map((k, idx) => {
+    const data = parsed.data.map(r => {
+      const v = r[k];
+      return (v === "" || v === null || isNaN(v)) ? null : Number(v);
+    });
+    return { label: k, data, hue: (idx*70)%360, tension:0.3 };
+  });
+  return { labels, datasets, rawFields: fields };
+}
+
+function smooth(arr, lvl){
+  if(lvl === 'none') return arr;
+  const windows = {low:1,med:2,high:4};
+  const w = windows[lvl] || 1;
+  const out = [];
+  for(let i=0;i<arr.length;i++){
+    if(arr[i]==null){ out.push(null); continue; }
+    let s=0,c=0;
+    for(let j=Math.max(0,i-w); j<=Math.min(arr.length-1,i+w); j++){
+      if(arr[j]!=null){ s+=arr[j]; c++; }
+    }
+    out.push(c? s/c : null);
+  }
+  return out;
+}
+
+/* ---------- Particles background ---------- */
+const pCanvas = $('particles'); const pCtx = pCanvas.getContext('2d');
+let particles = [];
+function resizeParticles(){ pCanvas.width = innerWidth; pCanvas.height = innerHeight; }
+function initParticles(){
+  resizeParticles(); particles = [];
+  const count = Math.max(12, Math.floor((innerWidth+innerHeight)/110));
+  for(let i=0;i<count;i++) particles.push({
+    x: Math.random()*pCanvas.width, y: Math.random()*pCanvas.height,
+    r: 8 + Math.random()*22, vx: (Math.random()-0.5)*0.4, vy: (Math.random()-0.5)*0.4,
+    hue: 180 + Math.random()*140, a: 0.08 + Math.random()*0.18
+  });
+}
+function drawParticles(){
+  pCtx.clearRect(0,0,pCanvas.width,pCanvas.height);
+  particles.forEach(p => {
+    p.x+=p.vx; p.y+=p.vy;
+    if(p.x<-60) p.x=pCanvas.width+60; if(p.x>pCanvas.width+60) p.x=-60;
+    if(p.y<-60) p.y=pCanvas.height+60; if(p.y>pCanvas.height+60) p.y=-60;
+    const g = pCtx.createRadialGradient(p.x,p.y,p.r*0.2,p.x,p.y,p.r);
+    g.addColorStop(0, `hsla(${p.hue},70%,70%,${p.a})`); g.addColorStop(1, `hsla(${p.hue},70%,60%,0)`);
+    pCtx.fillStyle = g; pCtx.beginPath(); pCtx.arc(p.x,p.y,p.r,0,Math.PI*2); pCtx.fill();
+  });
+}
+window.addEventListener('resize', ()=>{ resizeParticles(); initParticles(); });
+
+/* ---------- Chart setup ---------- */
+const ctx = $('chartCanvas').getContext('2d');
+let chart = null;
+function createChart({labels, datasets, type='line', smoothing='none'}){
+  if(chart) chart.destroy();
+  const mapped = datasets.map((ds,i) => {
+    const border = `hsl(${ds.hue} 80% 60%)`;
+    return {
+      label: ds.label,
+      data: smooth(ds.data, smoothing),
+      borderColor: border,
+      backgroundColor: border.replace('hsl','hsla').replace(')',',0.12)'),
+      tension: ds.tension, pointRadius:3, borderWidth:2, fill: type==='stacked' ? '+1' : false
+    };
+  });
+  const cfg = {
+    type: (type==='stacked') ? 'line' : (type==='radar' ? 'radar' : type),
+    data: { labels, datasets: mapped },
+    options: {
+      animation: { duration: 900, easing: 'easeOutCubic' },
+      responsive: true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{mode:'index',intersect:false} },
+      scales: (type==='radar') ? {} : { x:{grid:{color:'rgba(255,255,255,0.03)'}, ticks:{color:'rgba(255,255,255,0.8)'}}, y:{grid:{color:'rgba(255,255,255,0.03)'}, ticks:{color:'rgba(255,255,255,0.8)'}} },
+      elements:{ line:{borderJoinStyle:'round'} }
+    }
+  };
+  chart = new Chart(ctx, cfg);
+  renderLegend(mapped); $('dataSummary').textContent = `${labels.length} points • ${mapped.length} series`;
+  gsap.from(ctx.canvas, {duration:0.62, y:6, opacity:0, ease:'power2.out'});
+}
+
+/* ---------- Legend render ---------- */
+function renderLegend(dsArr){
+  const wrap = $('legendWrap'); wrap.innerHTML = '';
+  dsArr.forEach(ds => {
+    const el = document.createElement('div'); el.className='chip';
+    el.innerHTML = `<svg width="12" height="12" style="margin-right:8px;vertical-align:middle"><rect width="12" height="12" rx="3" fill="${ds.borderColor}"></rect></svg>${ds.label}`;
+    wrap.appendChild(el);
+  });
+}
+
+/* ---------- Rerender crop and settings ---------- */
+function rerender(){
+  const stored = localStorage.getItem('mtv_parsed'); if(!stored) return;
+  const parsed = JSON.parse(stored);
+  const built = buildFromParsed(parsed);
+  const pct = Number($('timeframe').value)/100;
+  const keep = Math.max(1, Math.floor(built.labels.length * pct));
+  const start = Math.max(0, built.labels.length - keep);
+  const croppedLabels = built.labels.slice(start);
+  const croppedDatasets = built.datasets.map(ds => ({...ds, data: ds.data.slice(start)}));
+  createChart({labels: croppedLabels, datasets: croppedDatasets, type:$('chartType').value, smoothing: $('smoothing').value});
+}
+
+/* ---------- Load CSV into app ---------- */
+async function loadCSVText(text, tag='embedded'){
+  try{
+    const parsed = await parseCSV(text);
+    localStorage.setItem('mtv_parsed', JSON.stringify(parsed));
+    $('csvArea').value = text;
+    rerender();
+    status('Loaded dataset: ' + tag);
+    savePreset(); // keep preset updated
+  } catch(e){ status('CSV parse error'); }
+}
+
+/* ---------- Controls wiring ---------- */
+$('datasetSelect').addEventListener('change', async (e)=>{
+  const v = e.target.value;
+  pauseAutoCycle(); // user action pauses automatic cycling
+  if(v === 'paste'){ status('Paste CSV and click Load'); return; }
+  await loadCSVText(EMBED[v], v);
+});
+
+$('loadCsvBtn').addEventListener('click', async ()=>{
+  const txt = $('csvArea').value.trim();
+  if(!txt){ status('Paste CSV first'); return; }
+  pauseAutoCycle();
+  await loadCSVText(txt, 'paste');
+});
+
+$('uploadBtn').addEventListener('click', ()=>{ $('fileInput').click(); });
+$('fileInput').addEventListener('change', async (ev)=>{
+  const f = ev.target.files[0]; if(!f) return;
+  const txt = await f.text();
+  pauseAutoCycle();
+  await loadCSVText(txt, f.name);
+});
+
+$('chartType').addEventListener('change', ()=>{ pauseAutoCycle(); rerender(); });
+$('smoothing').addEventListener('change', ()=>{ pauseAutoCycle(); rerender(); });
+$('timeframe').addEventListener('input', ()=>{ $('timeframeVal').textContent = $('timeframe').value + '%'; pauseAutoCycle(); rerender(); });
+$('fitBtn').addEventListener('click', ()=>{ $('timeframe').value = 100; $('timeframeVal').textContent='100%'; rerender(); });
+
+/* ---------- Play / Pause (simple reveal) ---------- */
+let playTimers = [];
+$('playBtn').addEventListener('click', ()=>{
+  if(!chart) return;
+  pauseAutoCycle();
+  const total = chart.data.datasets.length;
+  let i=0;
+  chart.data.datasets.forEach(ds => ds.hidden = true); chart.update();
+  const step = () => {
+    if(i>=total) return;
+    chart.data.datasets[i].hidden = false; chart.update();
+    i++; playTimers.push(setTimeout(step, 420));
+  };
+  step();
+});
+$('pauseBtn').addEventListener('click', ()=>{
+  playTimers.forEach(t=>clearTimeout(t)); playTimers=[];
+  if(chart){ chart.options.animation = {duration:0}; chart.update(); status('Paused'); }
+});
+
+/* ---------- Export PNG & CSV ---------- */
+$('exportPng').addEventListener('click', ()=>{
+  if(!chart){ status('No chart'); return; }
+  const link = document.createElement('a'); link.href = chart.toBase64Image(); link.download = 'market-trends.png'; document.body.appendChild(link); link.click(); link.remove();
+  exp('PNG exported');
+});
+$('exportCsv').addEventListener('click', ()=>{
+  const s = localStorage.getItem('mtv_parsed'); if(!s){ status('No data'); return; }
+  const parsed = JSON.parse(s); const built = buildFromParsed(parsed);
+  const pct = Number($('timeframe').value)/100; const keep = Math.max(1, Math.floor(built.labels.length * pct));
+  const start = Math.max(0, built.labels.length - keep);
+  const labels = built.labels.slice(start);
+  const header = parsed.meta.fields.join(',');
+  const rows = labels.map((lab, idx) => [lab, ...built.datasets.map(ds => ds.data[idx+start] ?? '')].join(','));
+  const csv = [header, ...rows].join('\n');
+  const blob = new Blob([csv], {type:'text/csv'}); const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'market-trends-crop.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  exp('CSV exported');
+});
+
+/* ---------- Preset copy/load & embed ---------- */
+function savePreset(){
+  const s = localStorage.getItem('mtv_parsed'); if(!s) return;
+  const obj = { parsed: JSON.parse(s), settings: { chartType: $('chartType').value, smoothing: $('smoothing').value, timeframe: $('timeframe').value } };
+  const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+  try{ navigator.clipboard.writeText(encoded); exp('Preset copied'); } catch(e){ exp('Preset ready'); }
+  localStorage.setItem('mtv_preset', encoded);
+}
+$('copyPreset').addEventListener('click', ()=>{ savePreset(); });
+$('embedBtn').addEventListener('click', ()=>{
+  const url = prompt('Public URL where this file will live (e.g. https://username.github.io/repo/) — leave blank for template:');
+  const src = (url && url.trim()) ? url.trim() : 'https://your-site-or-github.io/path/to/index.html';
+  const snippet = `<iframe src="${src}" width="960" height="540" style="border:0;border-radius:12px;overflow:hidden"></iframe>`;
+  try{ navigator.clipboard.writeText(snippet); exp('Embed copied'); } catch(e){ exp('Embed ready'); }
+  alert('Embed snippet (copied if permitted):\n\n' + snippet);
+});
+
+/* ---------- Theme toggle (dark/light) ---------- */
+function applyTheme(t){
+  if(t === 'light') document.documentElement.setAttribute('data-theme','light');
+  else document.documentElement.removeAttribute('data-theme');
+  try{ localStorage.setItem('mtv_theme', t); }catch(e){}
+}
+$('themeBtn').addEventListener('click', ()=>{
+  const cur = localStorage.getItem('mtv_theme') || 'dark';
+  const next = cur === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+});
+
+/* ---------- Preset load on paste (if user wants) ---------- */
+/* (Optional: if you paste a base64 preset into CSV area you could implement quick load — omitted for clarity) */
+
+/* ---------- Saving parsed data helper ---------- */
+function saveParsed(parsed){ localStorage.setItem('mtv_parsed', JSON.stringify(parsed)); }
+
+/* ---------- Load initial embedded dataset & auto-cycle ---------- */
+let autoTimer = null; let userPausedUntil = 0;
+const cycleOrder = ['crypto7','stocks7','techAdopt']; let cycleIndex = 0;
+const CYCLE_MS = 10000; const USER_PAUSE_MS = 20000;
+
+async function loadInitial(){
+  initParticles(); (function pLoop(){ drawParticles(); requestAnimationFrame(pLoop); })();
+  const raw = EMBED['crypto7'];
+  const parsed = await parseCSV(raw);
+  saveParsed(parsed);
+  rerender();
+  status('Loaded sample dataset — auto-cycling enabled.');
+  startAutoCycle();
+}
+
+/* Auto-cycle logic with pause on user interaction */
+function startAutoCycle(){
+  stopAutoCycle();
+  autoTimer = setInterval(() => {
+    if(Date.now() < userPausedUntil) return; // skip if user recently interacted
+    cycleIndex = (cycleIndex + 1) % cycleOrder.length;
+    const key = cycleOrder[cycleIndex];
+    // smooth dataset swap using GSAP fade
+    const oldCanvas = $('chartCanvas');
+    gsap.to(oldCanvas, {duration:0.35, opacity:0, onComplete: async ()=>{
+      await loadCSVText(EMBED[key], key);
+      gsap.fromTo(oldCanvas, {opacity:0}, {duration:0.5, opacity:1});
+    }});
+  }, CYCLE_MS);
+}
+
+function stopAutoCycle(){ if(autoTimer) clearInterval(autoTimer); autoTimer = null; }
+function pauseAutoCycle(){ userPausedUntil = Date.now() + USER_PAUSE_MS; }
+
+/* When user manually selects dataset, pause cycling for 20s */
+['datasetSelect','chartType','smoothing','loadCsvBtn','uploadBtn','csvArea','fileInput'].forEach(id=>{
+  try{ const el = $(id); if(el) el.addEventListener('change', ()=> pauseAutoCycle()); }catch(e){}
+});
+
+/* ---------- Restore theme & parsed on load ---------- */
+window.addEventListener('load', async ()=>{
+  const theme = localStorage.getItem('mtv_theme') || 'dark'; applyTheme(theme);
+  initParticles(); (function pLoop(){ drawParticles(); requestAnimationFrame(pLoop); })();
+  // load initial dataset
+  const stored = localStorage.getItem('mtv_parsed');
+  if(stored){ rerender(); status('Restored previous data.'); } else { await loadInitial(); }
+  // entrance animation
+  gsap.from('.card', {duration:0.8, opacity:0, y:10, stagger:0.06, ease:'power2.out'});
+});
+
+/* ---------- small convenience: clicking CSV area counts as user activity ---------- */
+$('csvArea').addEventListener('input', ()=> pauseAutoCycle());
+
+/* ---------- simple UI: clicking chart toggles play/pause ---------- */
+$('chartCanvas').addEventListener('click', ()=> { if(playTimers.length) { playTimers.forEach(t=>clearTimeout(t)); playTimers=[]; status('Stopped replay'); } else { $('playBtn').click(); } });
+
+</script>
+</body>
+</html>
