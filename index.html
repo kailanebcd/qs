@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Animated Market Trends Visualizer</title>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<!-- PapaParse for CSV parsing -->
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<!-- GSAP for UI micro-animations -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+
+<style>
+  :root{
+    --bg:#0f1724;
+    --glass-bg: rgba(255,255,255,0.06);
+    --glass-stroke: rgba(255,255,255,0.08);
+    --accent: #6EE7B7;
+    --muted: rgba(255,255,255,0.6);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  }
+  html,body{height:100%;margin:0;background:
+    radial-gradient(1200px 600px at 10% 10%, rgba(110,231,183,0.06), transparent 6%),
+    radial-gradient(1000px 400px at 90% 90%, rgba(99,102,241,0.04), transparent 10%),
+    var(--bg);
+    color: #E6EEF3;
+    -webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;
+  }
+  .wrap{max-width:1100px;margin:36px auto;padding:28px;display:grid;gap:18px;
+    grid-template-columns: 420px 1fr;
+  }
+
+  /* Glass card */
+  .card{
+    background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.02));
+    border: 1px solid var(--glass-stroke);
+    backdrop-filter: blur(10px) saturate(120%);
+    -webkit-backdrop-filter: blur(10px) saturate(120%);
+    border-radius:14px;
+    padding:18px;
+    box-shadow: 0 6px 30px rgba(2,6,23,0.6);
+  }
+
+  .sidebar {display:flex;flex-direction:column;gap:12px;height:calc(100vh - 120px);overflow:auto;}
+  h1{margin:0;font-size:18px;letter-spacing:-0.2px}
+  p.muted{color:var(--muted);font-size:13px;margin:6px 0 0}
+
+  .controls {display:grid;gap:10px}
+  label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
+  input[type="text"], select, input[type="file"]{
+    width:100%;
+    padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);
+    background:transparent;color:inherit;font-size:14px;outline:none;
+  }
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;border:0;
+    background:linear-gradient(90deg, rgba(110,231,183,0.12), rgba(99,102,241,0.06));
+    color:#E7FFF7;font-weight:600;cursor:pointer;
+  }
+  .row{display:flex;gap:8px;align-items:center}
+  .small{font-size:13px;color:var(--muted)}
+  .filebox{padding:10px;border-radius:10px;border:1px dashed rgba(255,255,255,0.05);text-align:center}
+  .sample-links{display:flex;gap:8px;flex-wrap:wrap}
+
+  /* Chart area */
+  .chart-area{display:flex;flex-direction:column;gap:12px;height:calc(100vh - 120px)}
+  #canvasWrap{flex:1;display:flex;align-items:center;justify-content:center;padding:18px}
+  canvas{max-height:100%;max-width:100%}
+
+  .meta{display:flex;justify-content:space-between;align-items:center}
+  .legend{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .chip{padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,0.04);font-size:13px;color:var(--muted)}
+
+  footer{grid-column:1/-1;text-align:center;color:var(--muted);font-size:13px;margin-top:8px}
+  .note{font-size:12px;color:var(--muted)}
+
+  /* small responsive */
+  @media (max-width:980px){
+    .wrap{grid-template-columns:1fr; padding:16px}
+    .sidebar{height:auto}
+    .chart-area{height:auto}
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card sidebar" id="leftCard">
+      <h1>Animated Market Trends Visualizer</h1>
+      <p class="muted">Paste a CSV URL, upload a CSV, or use the sample dataset. Interactive, animated charts with glassmorphic UI. Designed for fast sharing and embedding.</p>
+
+      <div class="controls">
+        <div>
+          <label>CSV URL (public):</label>
+          <input id="csvUrl" type="text" placeholder="https://example.com/data.csv" />
+          <div class="row" style="margin-top:8px;">
+            <button class="btn" id="loadUrlBtn">Load URL</button>
+            <button class="btn" id="useSampleBtn">Use Sample</button>
+          </div>
+        </div>
+
+        <div>
+          <label>Upload CSV</label>
+          <div class="filebox">
+            <input id="fileInput" type="file" accept=".csv" />
+            <div class="small note">First row = headers. First column = labels (e.g. years/dates). Remaining columns = numeric series.</div>
+          </div>
+        </div>
+
+        <div>
+          <label>Chart Type</label>
+          <select id="chartType">
+            <option value="line">Animated Line (default)</option>
+            <option value="bar">Animated Bar</option>
+            <option value="radar">Radar</option>
+            <option value="stacked">Stacked Area (line stacked)</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <div style="flex:1">
+            <label>Data Smoothing</label>
+            <select id="smoothing">
+              <option value="none">None</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </div>
+          <div style="width:120px">
+            <label>Points</label>
+            <select id="pointDensity">
+              <option value="auto">Auto</option>
+              <option value="sparse">Sparse</option>
+              <option value="dense">Dense</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label>Play Animation</label>
+          <div class="row">
+            <button class="btn" id="playBtn">Play</button>
+            <button class="btn" id="pauseBtn">Pause</button>
+            <div style="flex:1"></div>
+            <button class="btn" id="downloadBtn">Download PNG</button>
+          </div>
+        </div>
+
+        <div>
+          <label>Timeframe Slider</label>
+          <input id="timeframe" type="range" min="1" max="100" value="100" />
+          <div class="small">Use to focus on recent points (drag left to crop older data).</div>
+        </div>
+
+        <div>
+          <label>Share / Save</label>
+          <div class="row">
+            <button class="btn" id="copyLinkBtn">Copy Preset</button>
+            <div class="small" style="margin-left:8px" id="copyStatus"></div>
+          </div>
+          <div class="note" style="margin-top:8px">Preset copies a base64 snapshot of dataset+settings to clipboard for quick sharing.</div>
+        </div>
+
+        <div>
+          <label>Tips</label>
+          <div class="sample-links small">
+            <div class="chip">Use yearly data (e.g. 2016,2017,...)</div>
+            <div class="chip">Use numeric only for series columns</div>
+            <div class="chip">CSV headers: Year, SeriesA, SeriesB, ...</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="card chart-area">
+      <div class="meta">
+        <div>
+          <div class="legend" id="legendWrap"></div>
+          <div class="small" id="dataSummary">No data loaded yet.</div>
+        </div>
+        <div style="text-align:right">
+          <div class="small">Built for quick sharing • Glassmorphic UI</div>
+        </div>
+      </div>
+
+      <div id="canvasWrap">
+        <canvas id="chartCanvas"></canvas>
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;">
+        <div class="small" id="status">Ready.</div>
+        <div class="small">Tip: Upload a CSV or hit “Use Sample” to start.</div>
+      </div>
+
+    </div>
+
+    <footer class="muted">Deploy: push this file to GitHub & enable Pages / or import the repo into Vercel. No backend required.</footer>
+  </div>
+
+<script>
+// --------- Sample data (CSV string) ----------
+const SAMPLE_CSV = `Year,Cloud Infrastructure,AI Tools,Semiconductors,Consumer Electronics
+2016,45,12,60,120
+2017,52,18,66,125
+2018,63,28,72,130
+2019,78,45,80,135
+2020,95,68,95,120
+2021,120,110,130,140
+2022,150,180,160,155
+2023,190,260,205,170
+2024,230,360,260,200
+`;
+
+// --------- Helpers ----------
+const $ = id => document.getElementById(id);
+const status = txt => { $('status').textContent = txt; };
+
+function parseCSVText(text){
+  return new Promise(resolve => {
+    const res = Papa.parse(text.trim(), {header:true, dynamicTyping:true, skipEmptyLines:true});
+    resolve(res);
+  });
+}
+
+function buildDatasets(parsed){
+  // first column is labels
+  const fields = parsed.meta.fields.slice(); // headers
+  const labelKey = fields[0];
+  const labels = parsed.data.map(r => r[labelKey]);
+  const seriesKeys = fields.slice(1);
+  const datasets = seriesKeys.map((k, idx) => {
+    const data = parsed.data.map(r => {
+      const v = r[k];
+      return (v === "" || v === null || isNaN(v)) ? null : Number(v);
+    });
+    const colorHue = (idx * 70) % 360;
+    return {
+      label: k,
+      data,
+      borderWidth: 2,
+      tension: 0.35,
+      pointRadius: 3,
+      cubicInterpolationMode: 'monotone',
+      // color will be assigned by Chart options when creating
+      _hue: colorHue
+    };
+  });
+  return {labels, datasets};
+}
+
+function smoothSeries(data, level){
+  if(level === 'none') return data;
+  const windowMap = {low:2, medium:3, high:5};
+  const w = windowMap[level] || 2;
+  const out = [];
+  for(let i=0;i<data.length;i++){
+    if(data[i] === null){ out.push(null); continue; }
+    let sum=0, cnt=0;
+    for(let j=Math.max(0,i-w); j<=Math.min(data.length-1,i+w); j++){
+      if(data[j] != null){ sum += data[j]; cnt++; }
+    }
+    out.push(cnt? sum/cnt : null);
+  }
+  return out;
+}
+
+// --------- Chart Initialization ----------
+let chart = null;
+const ctx = $('chartCanvas').getContext('2d');
+
+function createChart({labels, datasets, type, smoothing, stacked=false, pointDensity='auto'}){
+  if(chart) chart.destroy();
+
+  // apply smoothing
+  datasets = datasets.map(ds => {
+    const smoothed = smoothSeries(ds.data, smoothing);
+    return {...ds, data: smoothed};
+  });
+
+  // derive colors
+  const colors = datasets.map(ds => {
+    return {
+      border: `hsl(${ds._hue} 80% 65%)`,
+      background: `linear-gradient(180deg, hsla(${ds._hue} 80% 65% / 0.14), transparent)`
+    };
+  });
+
+  // Chart dataset mapping
+  const mapped = datasets.map((ds,i) => {
+    return {
+      label: ds.label,
+      data: ds.data,
+      fill: (type === 'line' || type === 'stacked') ? (type === 'stacked' ? '+1' : false) : false,
+      borderColor: colors[i].border,
+      backgroundColor: colors[i].border.replace('hsl','hsla').replace(')',',0.12)'),
+      tension: ds.tension,
+      pointRadius: (pointDensity === 'sparse') ? 1 : (pointDensity === 'dense' ? 5 : 3),
+      borderWidth: 2,
+    };
+  });
+
+  const config = {
+    type: (type === 'stacked') ? 'line' : (type === 'radar' ? 'radar' : type),
+    data: {labels, datasets: mapped},
+    options: {
+      animation: {duration: 900, easing: 'easeOutCubic'},
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        tooltip: {mode: 'index', intersect: false},
+        legend: {display: false}
+      },
+      scales: (type === 'radar') ? {} : {
+        x: {
+          grid: {color: 'rgba(255,255,255,0.03)'},
+          ticks: {color: 'rgba(255,255,255,0.75)'}
+        },
+        y: {
+          stacked: (type === 'stacked'),
+          grid: {color: 'rgba(255,255,255,0.03)'},
+          ticks: {color: 'rgba(255,255,255,0.75)'}
+        }
+      },
+      elements: {
+        line: {borderJoinStyle: 'round'}
+      }
+    }
+  };
+
+  chart = new Chart(ctx, config);
+  // legend and summary
+  renderLegend(mapped);
+  $('dataSummary').textContent = `${labels.length} points • ${mapped.length} series`;
+  // add a micro-animation
+  gsap.from(ctx.canvas, {duration:0.7, y:8, opacity:0, ease:'power2.out'});
+}
+
+// --------- UI Actions ----------
+$('useSampleBtn').addEventListener('click', async () => {
+  $('csvUrl').value = '';
+  const parsed = await parseCSVText(SAMPLE_CSV);
+  const d = buildDatasets(parsed);
+  savePreset({source:'embedded',csv:SAMPLE_CSV});
+  createChart({labels:d.labels, datasets:d.datasets, type:'line', smoothing:'none'});
+  status('Loaded sample dataset.');
+});
+
+$('loadUrlBtn').addEventListener('click', async () => {
+  const url = $('csvUrl').value.trim();
+  if(!url){ status('Enter a CSV URL or use sample.'); return; }
+  status('Fetching CSV... (CORS may block some hosts)');
+  try {
+    const r = await fetch(url);
+    if(!r.ok) throw new Error('Network error');
+    const txt = await r.text();
+    const parsed = await parseCSVText(txt);
+    const d = buildDatasets(parsed);
+    savePreset({source:'url',csvUrl:url});
+    createChart({labels:d.labels, datasets:d.datasets, type: $('chartType').value, smoothing: $('smoothing').value, stacked: $('chartType').value==='stacked'});
+    status('Loaded CSV from URL.');
+  } catch(err){
+    status('Failed to fetch CSV. Try uploading or using sample. (' + (err.message||'') + ')');
+  }
+});
+
+$('fileInput').addEventListener('change', async (ev) => {
+  const f = ev.target.files[0];
+  if(!f) return;
+  const txt = await f.text();
+  const parsed = await parseCSVText(txt);
+  const d = buildDatasets(parsed);
+  savePreset({source:'upload',filename:f.name, csv:txt});
+  createChart({labels:d.labels, datasets:d.datasets, type: $('chartType').value, smoothing: $('smoothing').value, stacked: $('chartType').value==='stacked'});
+  status('Loaded CSV file: ' + f.name);
+});
+
+$('chartType').addEventListener('change', () => {
+  rerender();
+});
+$('smoothing').addEventListener('change', () => { rerender(); });
+$('pointDensity').addEventListener('change', () => { rerender(); });
+
+$('playBtn').addEventListener('click', () => {
+  if(!chart) return;
+  // simple "replay" by animating dataset visibility sequentially
+  const total = chart.data.datasets.length;
+  let i = 0;
+  chart.data.datasets.forEach(ds => ds.hidden = true);
+  const step = () => {
+    if(i >= total) return;
+    chart.data.datasets[i].hidden = false;
+    chart.update();
+    i++;
+    setTimeout(step, 400);
+  };
+  step();
+});
+
+$('pauseBtn').addEventListener('click', () => {
+  // Chart.js doesn't have timeline pause — we'll simply stop animations by re-rendering static
+  if(!chart) return;
+  chart.options.animation = {duration:0};
+  chart.update();
+  status('Animation paused (static render).');
+});
+
+$('downloadBtn').addEventListener('click', () => {
+  if(!chart) return;
+  const link = document.createElement('a');
+  link.href = chart.toBase64Image();
+  link.download = 'market-trends.png';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+});
+
+$('timeframe').addEventListener('input', () => {
+  const pct = Number($('timeframe').value);
+  $('timeframe').title = pct + '%';
+  rerender();
+});
+
+$('copyLinkBtn').addEventListener('click', async () => {
+  // create small preset object stored as base64 JSON
+  const preset = localStorage.getItem('mtv_preset');
+  if(!preset){ $('copyStatus').textContent = 'No preset to copy. Load data first.'; setTimeout(()=>$('copyStatus').textContent='',2500); return;}
+  try {
+    await navigator.clipboard.writeText(preset);
+    $('copyStatus').textContent = 'Copied!';
+    setTimeout(()=>$('copyStatus').textContent='',1800);
+  } catch(e){
+    $('copyStatus').textContent = 'Clipboard denied';
+    setTimeout(()=>$('copyStatus').textContent='',1800);
+  }
+});
+
+// --------- Rerender with current controls ----------
+function rerender(){
+  if(!localStorage.getItem('mtv_parsed')) return;
+  const parsed = JSON.parse(localStorage.getItem('mtv_parsed'));
+  const d = buildDatasets(parsed);
+  const maxPct = Number($('timeframe').value) / 100;
+  // crop labels/datasets by timeframe
+  const keep = Math.max(1, Math.floor(d.labels.length * maxPct));
+  const croppedLabels = d.labels.slice(Math.max(0, d.labels.length - keep));
+  const croppedDatasets = d.datasets.map(ds => ({...ds, data: ds.data.slice(Math.max(0, ds.data.length - keep))}));
+  const type = $('chartType').value;
+  createChart({labels: croppedLabels, datasets: croppedDatasets, type, smoothing: $('smoothing').value, stacked: type==='stacked', pointDensity: $('pointDensity').value});
+}
+
+// --------- Legend Renderer ----------
+function renderLegend(mappedDatasets){
+  const wrap = $('legendWrap'); wrap.innerHTML = '';
+  mappedDatasets.forEach(ds => {
+    const el = document.createElement('div');
+    el.className = 'chip';
+    el.innerHTML = `<svg width="12" height="12" style="margin-right:8px;vertical-align:middle"><rect width="12" height="12" rx="3" fill="${ds.borderColor}"></rect></svg> ${ds.label}`;
+    wrap.appendChild(el);
+  });
+}
+
+// --------- Preset storage ----------
+function savePreset(obj){
+  // store the parsed CSV text + settings in base64 for sharing
+  const parsedText = (obj.csv) ? obj.csv : (obj.csvUrl ? 'url:' + obj.csvUrl : SAMPLE_CSV);
+  // try to parse/normalize to save parsed data
+  parseCSVText(parsedText).then(parsed => {
+    localStorage.setItem('mtv_parsed', JSON.stringify(parsed));
+    const presetObj = {
+      parsedFields: parsed.meta.fields,
+      rawCsvFirst200: parsedText.slice(0, 200),
+      settings: {
+        chartType: $('chartType').value,
+        smoothing: $('smoothing').value,
+        timeframe: $('timeframe').value,
+        pointDensity: $('pointDensity').value
+      }
+    };
+    const txt = btoa(unescape(encodeURIComponent(JSON.stringify(presetObj))));
+    // copy full parsed dataset (base64)
+    const fullObj = {parsed, settings: presetObj.settings};
+    const fullTxt = btoa(unescape(encodeURIComponent(JSON.stringify(fullObj))));
+    try { navigator.clipboard.writeText(fullTxt); } catch(e) {}
+    localStorage.setItem('mtv_preset', fullTxt);
+  });
+}
+
+// --------- On load: try to restore last preset ----------
+window.addEventListener('load', () => {
+  // micro entrance animation
+  gsap.from('.card', {duration:0.8, opacity:0, y:10, stagger:0.06, ease:'power2.out'});
+
+  const stored = localStorage.getItem('mtv_parsed');
+  if(stored){
+    try {
+      const parsed = JSON.parse(stored);
+      const d = buildDatasets(parsed);
+      createChart({labels:d.labels, datasets:d.datasets, type:'line', smoothing:'none'});
+      status('Restored previous dataset.');
+    } catch(e) {
+      status('Ready.');
+    }
+  } else {
+    // show sample automatically
+    // (do NOT auto-load to avoid surprises — show sample only on demand)
+    status('Ready. Click "Use Sample" to demo.');
+  }
+});
+</script>
+
+</body>
+</html>
